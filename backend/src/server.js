@@ -2,36 +2,107 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import { supabase } from './config/supabase.js'
+import authRoute from './route/common/auth.route.js'
+import adminRoute from './route/admin/admin.route.js'
+import adminUserRoute from './route/admin/user.route.js'
+import hrUserRoute from './route/hr/user.route.js'
 
 const app = express()
 const port = process.env.PORT || 4000
 
-app.use(cors())
+app.use(
+  cors({
+    origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+  })
+)
 app.use(express.json())
 
-app.get('/api/health', async (_req, res) => {
+app.use('/api/auth', authRoute)
+app.use('/api/admin', adminRoute)
+app.use('/api/admin', adminUserRoute)
+app.use('/api/hr', hrUserRoute)
+
+async function checkSupabaseConnection() {
   const configured = Boolean(
     process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
   )
 
-  let supabaseReachable = false
-  if (configured) {
+  if (!configured) {
+    return {
+      configured: false,
+      connected: false,
+      error: 'SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing',
+    }
+  }
+
+  try {
     const { error } = await supabase.auth.admin.listUsers({
       page: 1,
       perPage: 1,
     })
-    supabaseReachable = !error
+
+    if (error) {
+      return {
+        configured: true,
+        connected: false,
+        error: error.message,
+      }
+    }
+
+    return {
+      configured: true,
+      connected: true,
+      error: null,
+    }
+  } catch (error) {
+    return {
+      configured: true,
+      connected: false,
+      error: error.message,
+    }
   }
+}
+
+app.get('/api/health', async (_req, res) => {
+  const supabaseStatus = await checkSupabaseConnection()
 
   res.json({
-    ok: true,
+    ok: supabaseStatus.connected,
     service: 'hrims-backend',
-    supabaseConfigured: configured,
-    supabaseReachable,
+    supabaseConfigured: supabaseStatus.configured,
+    supabaseConnected: supabaseStatus.connected,
+    supabaseError: supabaseStatus.error,
     timestamp: new Date().toISOString(),
   })
 })
 
-app.listen(port, () => {
+app.get('/api/supabase-status', async (_req, res) => {
+  const status = await checkSupabaseConnection()
+
+  if (!status.connected) {
+    return res.status(503).json({
+      ok: false,
+      supabaseConfigured: status.configured,
+      supabaseConnected: false,
+      error: status.error,
+    })
+  }
+
+  return res.json({
+    ok: true,
+    supabaseConfigured: true,
+    supabaseConnected: true,
+    message: 'Supabase connection successful',
+  })
+})
+
+app.listen(port, async () => {
   console.log(`Backend running on http://localhost:${port}`)
+
+  const status = await checkSupabaseConnection()
+  if (status.connected) {
+    console.log('Database connected successfully')
+  } else {
+    console.log(`Database connection failed: ${status.error}`)
+  }
 })
